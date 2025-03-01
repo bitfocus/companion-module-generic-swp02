@@ -25,9 +25,9 @@ export default function (self) {
 			name: 'Connect',
 			description: 'Connect a crosspoint',
 			options: [optionDst, optionSrc],
-			callback: async ({ options }) => {
-				let dst = parseInt(await self.parseVariablesInString(options.dst))
-				let src = parseInt(await self.parseVariablesInString(options.src))
+			callback: async ({ options }, context) => {
+				let dst = parseInt(await context.parseVariablesInString(options.dst))
+				let src = parseInt(await context.parseVariablesInString(options.src))
 				if (isNaN(dst) || dst < 1 || dst > self.config.dst || isNaN(src) || src < 1 || src > self.config.src) {
 					self.log('warn', `an invalid variable has been passed: dst: ${dst} src: ${src}`)
 					return undefined
@@ -43,8 +43,8 @@ export default function (self) {
 					self.calcCheckSum([cmd.connect, dst[0] * 16 + src[0], dst[1], src[1]]),
 				])
 			},
-			subscribe: async ({ options }) => {
-				let dst = parseInt(await self.parseVariablesInString(options.dst))
+			subscribe: async ({ options }, context) => {
+				let dst = parseInt(await context.parseVariablesInString(options.dst))
 				if (isNaN(dst) || dst < 0 || dst > self.config.dst) {
 					self.log('warn', `an invalid variable has been passed: ${dst}`)
 					return undefined
@@ -61,8 +61,8 @@ export default function (self) {
 					self.calcCheckSum([cmd.interrogate, multiplier, dst[1]]),
 				])
 			},
-			learn: async (action) => {
-				let dst = parseInt(await self.parseVariablesInString(action.options.dst))
+			learn: async (action, context) => {
+				let dst = parseInt(await context.parseVariablesInString(action.options.dst))
 				if (isNaN(dst) || dst < 0 || dst > self.config.dst) {
 					self.log('warn', `an invalid variable has been passed: ${dst}`)
 					return undefined
@@ -88,8 +88,8 @@ export default function (self) {
 			name: 'Interrogate',
 			description: 'Interrogate a destination',
 			options: [optionDst],
-			callback: async ({ options }) => {
-				let dst = parseInt(await self.parseVariablesInString(options.dst))
+			callback: async ({ options }, context) => {
+				let dst = parseInt(await context.parseVariablesInString(options.dst))
 				if (isNaN(dst) || dst < 0 || dst > self.config.dst) {
 					self.log('warn', `an invalid variable has been passed: dst: ${dst}}`)
 					return undefined
@@ -105,8 +105,8 @@ export default function (self) {
 					self.calcCheckSum([cmd.interrogate, dst[0] * 16, dst[1]]),
 				])
 			},
-			subscribe: async ({ options }) => {
-				let dst = parseInt(await self.parseVariablesInString(options.dst))
+			subscribe: async ({ options }, context) => {
+				let dst = parseInt(await context.parseVariablesInString(options.dst))
 				if (isNaN(dst) || dst < 0 || dst > self.config.dst) {
 					self.log('warn', `an invalid variable has been passed: ${dst}`)
 					return undefined
@@ -127,9 +127,9 @@ export default function (self) {
 			name: 'Connect on Go',
 			description: 'Prepare a crosspoint',
 			options: [optionDst, optionSrc],
-			callback: async ({ options }) => {
-				let dst = parseInt(await self.parseVariablesInString(options.dst))
-				let src = parseInt(await self.parseVariablesInString(options.src))
+			callback: async ({ options }, context) => {
+				let dst = parseInt(await context.parseVariablesInString(options.dst))
+				let src = parseInt(await context.parseVariablesInString(options.src))
 				if (isNaN(dst) || dst < 0 || dst > self.config.dst || isNaN(src) || src < 0 || src > self.config.src) {
 					self.log('warn', `an invalid variable has been passed: dst: ${dst} src: ${src}`)
 					return undefined
