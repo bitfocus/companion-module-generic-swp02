@@ -1,4 +1,4 @@
-import { EventEmitter, setMaxListeners } from 'node:events'
+import { EventEmitter } from 'node:events'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { InstanceStatus, TCPHelper, type LogLevel } from '@companion-module/base'
 import PQueue from 'p-queue'
@@ -232,8 +232,6 @@ export class RouterConnection extends EventEmitter<RouterEvents> {
 		this.#close()
 		const { host, port } = this.#options
 		this.#session = new AbortController()
-		// p-queue adds an abort listener for each job, and interrogating every destination queues up to 1024 at once
-		setMaxListeners(0, this.#session.signal)
 		this.#reader.reset()
 		this.#lineClear = Promise.resolve()
 		this.#lastReceived = Date.now()
