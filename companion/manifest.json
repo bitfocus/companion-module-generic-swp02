@@ -1,4 +1,6 @@
 {
+	"$schema": "../node_modules/@companion-module/base/assets/manifest.schema.json",
+	"type": "connection",
 	"id": "generic-swp02",
 	"name": "Generic-SW-P-02",
 	"shortname": "SW-P-02",
@@ -14,13 +16,13 @@
 		}
 	],
 	"runtime": {
-		"type": "node22",
+		"type": "node26",
 		"api": "nodejs-ipc",
 		"apiVersion": "0.0.0",
-		"entrypoint": "../src/main.js"
+		"entrypoint": "../dist/main.js"
 	},
 	"legacyIds": [],
 	"manufacturer": "Generic",
-	"products": ["SW-P-02", "Probel Router SW P 02", "Snell Router SW P 02"],
-	"keywords": ["Hardware", "Router", "Video", "SDI"]
+	"products": ["SW-P-02"],
+	"keywords": ["Hardware", "Router", "Video", "SDI", "Pro-Bel", "Snell"]
 }
