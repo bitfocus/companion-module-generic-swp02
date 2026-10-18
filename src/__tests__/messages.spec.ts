@@ -5,11 +5,13 @@ import {
 	connectOnGo,
 	databaseChecksumRequest,
 	dualControllerStatusRequest,
+	endsMerging,
 	fromWire,
 	go,
 	GoMode,
 	interrogate,
 	isAddress,
+	mergeKey,
 	routerConfigurationRequest,
 	toWireAddress,
 } from '../api/index.js'
@@ -101,5 +103,40 @@ describe('addresses', () => {
 		// 1.2.4 computed (multiplier - (multiplier & 7)) / 16, so 0x08 gave destination 65 rather than 1
 		expect(fromWire(0x08, 0, 0)).toEqual({ destination: 1, source: 1 })
 		expect(fromWire(0x1f, 71, 103)).toEqual({ destination: 200, source: 1000 })
+	})
+})
+
+describe('merging', () => {
+	it('gives every interrogate of a destination one key, and every connect to one another', () => {
+		expect(mergeKey(interrogate(200))).toBe(mergeKey(interrogate(200)))
+		// Source 1000 sets the multiplier's low bits, which are not the destination's
+		expect(mergeKey(connect(200, 1))).toBe(mergeKey(connect(200, 1000)))
+		expect(mergeKey(interrogate(200))).not.toBe(mergeKey(connect(200, 1)))
+	})
+
+	it('keys each destination apart, high bits included', () => {
+		// 1, 129 and 257 differ only in their DIV 128
+		const keys = [1, 129, 257, 200, 1024].flatMap((d) => [mergeKey(interrogate(d)), mergeKey(connect(d, 1))])
+		expect(keys).not.toContain(undefined)
+		expect(new Set(keys).size).toBe(keys.length)
+	})
+
+	it('never merges anything else', () => {
+		const others = [
+			connectOnGo(5, 1),
+			go(GoMode.Set),
+			databaseChecksumRequest(),
+			dualControllerStatusRequest(),
+			routerConfigurationRequest(),
+		]
+		for (const message of others) expect(mergeKey(message)).toBeUndefined()
+	})
+
+	it('stops merging at a GO, and only at a GO', () => {
+		expect(endsMerging(go(GoMode.Set))).toBe(true)
+		expect(endsMerging(go(GoMode.Clear))).toBe(true)
+		for (const message of [interrogate(5), connect(5, 1), connectOnGo(5, 1), databaseChecksumRequest()]) {
+			expect(endsMerging(message)).toBe(false)
+		}
 	})
 })

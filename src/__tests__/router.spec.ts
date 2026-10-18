@@ -4,6 +4,9 @@ import { InstanceStatus, type LogLevel } from '@companion-module/base'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
 	Command,
+	connect,
+	go,
+	GoMode,
 	interrogate,
 	Priority,
 	RouterConnection,
@@ -182,6 +185,150 @@ describe('aborting', () => {
 		await expect(router.send(interrogate(1), Priority.Action, AbortSignal.abort())).rejects.toThrow()
 		await sleep(50)
 		expect(fake.received).toHaveLength(0)
+	})
+})
+
+describe('merging', () => {
+	/**
+	 * Connects, and sends interrogate 1 to a router that doesn't answer, so whatever is sent next waits behind it. The
+	 * first message sent next is taken from the queue at once, and waits for the line in the queue's one running slot
+	 */
+	async function holdingLine() {
+		const created = await connected({ timing: { ackTimeout: 100 } })
+		fake.answering = false
+		await created.router.send(interrogate(1))
+		return created
+	}
+
+	it("sends interrogates of one destination once, in the first one's place", async () => {
+		const { router } = await holdingLine()
+		await Promise.all([5, 6, 5, 5].map(async (d) => router.send(interrogate(d))))
+		await sleep(30)
+		expect(fake.interrogated()).toEqual([1, 5, 6])
+	})
+
+	it('moves a merged interrogate up to the highest priority it is sent at', async () => {
+		const { router } = await holdingLine()
+		// 2 is taken from the queue at once, so the action can only go after it
+		const background = [2, 3, 4, 5].map(async (d) => router.send(interrogate(d), Priority.Background))
+		const action = router.send(interrogate(4), Priority.Action)
+		await Promise.all([...background, action])
+		await sleep(30)
+		expect(fake.interrogated()).toEqual([1, 2, 4, 3, 5])
+	})
+
+	it('never moves a merged interrogate down', async () => {
+		const { router } = await holdingLine()
+		const first = router.send(interrogate(9), Priority.Background)
+		const action = router.send(interrogate(5), Priority.Action)
+		const background = [2, 3, 5].map(async (d) => router.send(interrogate(d), Priority.Background))
+		await Promise.all([first, action, ...background])
+		await sleep(30)
+		expect(fake.interrogated()).toEqual([1, 9, 5, 2, 3])
+	})
+
+	it("sends connects to one destination once, with the last source, in the first one's place", async () => {
+		const { router } = await holdingLine()
+		const messages = [connect(4, 1), connect(5, 1), connect(6, 1), connect(5, 2), connect(5, 3)]
+		await Promise.all(messages.map(async (m) => router.send(m, Priority.Action)))
+		await sleep(30)
+		expect(fake.routed()).toEqual([
+			{ destination: 4, source: 1 },
+			{ destination: 5, source: 3 },
+			{ destination: 6, source: 1 },
+		])
+	})
+
+	it('takes the source of a connect merged while the first one waits for the line', async () => {
+		const { router } = await holdingLine()
+		const first = router.send(connect(5, 1), Priority.Action)
+		await sleep(30)
+		await Promise.all([first, router.send(connect(5, 2), Priority.Action)])
+		await sleep(30)
+		expect(fake.routed()).toEqual([{ destination: 5, source: 2 }])
+	})
+
+	it('never merges with a message already sent', async () => {
+		// Each message is sent while the one before waits for its reply
+		const { router } = await holdingLine()
+		await router.send(interrogate(1))
+		await router.send(connect(5, 1), Priority.Action)
+		await router.send(connect(5, 2), Priority.Action)
+		await sleep(30)
+		expect(fake.interrogated()).toEqual([1, 1])
+		expect(fake.routed()).toEqual([
+			{ destination: 5, source: 1 },
+			{ destination: 5, source: 2 },
+		])
+	})
+
+	it('does not merge across a GO, which can change crosspoints by itself', async () => {
+		const { router } = await holdingLine()
+		const messages = [interrogate(5), connect(5, 1), go(GoMode.Set), interrogate(5), connect(5, 2)]
+		await Promise.all(messages.map(async (m) => router.send(m, Priority.Action)))
+		await sleep(30)
+		expect(fake.commands()).toEqual([
+			Command.Interrogate,
+			Command.Interrogate,
+			Command.Connect,
+			Command.Go,
+			Command.Interrogate,
+			Command.Connect,
+		])
+		expect(fake.routed()).toEqual([
+			{ destination: 5, source: 1 },
+			{ destination: 5, source: 2 },
+		])
+	})
+
+	it('still sends a merged message when one of its senders aborts', async () => {
+		const { router } = await holdingLine()
+		const controller = new AbortController()
+		const aborted = router.send(interrogate(5), Priority.Action, controller.signal)
+		const kept = router.send(interrogate(5), Priority.Action)
+		controller.abort()
+		await expect(aborted).rejects.toThrow()
+		await kept
+		await sleep(30)
+		expect(fake.interrogated()).toEqual([1, 5])
+	})
+
+	it('sends the source of the newest connect whose sender has not aborted', async () => {
+		const { router } = await holdingLine()
+		const controller = new AbortController()
+		const kept = router.send(connect(5, 1), Priority.Action)
+		const aborted = router.send(connect(5, 2), Priority.Action, controller.signal)
+		controller.abort()
+		await expect(aborted).rejects.toThrow()
+		await kept
+		await sleep(30)
+		expect(fake.routed()).toEqual([{ destination: 5, source: 1 }])
+	})
+
+	it('drops a merged message once every sender has aborted, and sends the next one afresh', async () => {
+		const { router } = await holdingLine()
+		const controllers = [new AbortController(), new AbortController()]
+		const sends = controllers.map(async (c) => router.send(interrogate(5), Priority.Action, c.signal))
+		for (const controller of controllers) controller.abort()
+		await Promise.all(sends.map(async (s) => expect(s).rejects.toThrow()))
+		await router.send(interrogate(5), Priority.Action)
+		await sleep(30)
+		expect(fake.interrogated()).toEqual([1, 5])
+	})
+
+	it('sends afresh after reconnecting a message dropped when the connection closed', async () => {
+		const { router } = await connected({ timing: { ackTimeout: 5000, reconnectInterval: 50 } })
+		fake.answering = false
+		await router.send(interrogate(1))
+		const dropped = router.send(interrogate(5))
+		await vi.waitFor(() => expect(fake.interrogated()).toEqual([1]))
+		const reopened = once(router, 'connected')
+		fake.dropConnections()
+		await expect(dropped).rejects.toThrow()
+		fake.answering = true
+		await reopened
+		await router.send(interrogate(5))
+		await vi.waitFor(() => expect(fake.interrogated()).toEqual([1, 5]))
 	})
 })
 

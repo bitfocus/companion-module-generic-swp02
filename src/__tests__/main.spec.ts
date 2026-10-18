@@ -219,6 +219,18 @@ describe('sending', () => {
 		expect(commands.indexOf(Command.Connect)).toBeLessThan(commands.lastIndexOf(Command.Interrogate) - 50)
 	})
 
+	it('sends an interrogate of a destination still waiting to be interrogated once, ahead of the rest', async () => {
+		const { instance } = createInstance()
+		await instance.init(config({ dst: 64 }))
+		await vi.waitFor(() => expect(fake.interrogated().length).toBeGreaterThan(2))
+		await instance.interrogate(60)
+		await vi.waitFor(() => expect(fake.interrogated()).toHaveLength(64), { timeout: 5000 })
+		await sleep(100)
+		const interrogated = fake.interrogated()
+		expect(interrogated.filter((d) => d === 60)).toHaveLength(1)
+		expect(interrogated.indexOf(60)).toBeLessThan(10)
+	})
+
 	it('passes on the abort signal', async () => {
 		const { instance } = await started()
 		await expect(instance.send(connect(1, 2), AbortSignal.abort())).rejects.toThrow()

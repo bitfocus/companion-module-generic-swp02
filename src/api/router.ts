@@ -10,7 +10,14 @@ import {
 	Priority,
 	RECONNECT_INTERVAL_MS,
 } from './consts.js'
-import { databaseChecksumRequest, dualControllerStatusRequest, hex, routerConfigurationRequest } from './messages.js'
+import {
+	databaseChecksumRequest,
+	dualControllerStatusRequest,
+	endsMerging,
+	hex,
+	mergeKey,
+	routerConfigurationRequest,
+} from './messages.js'
 import { decodeFrame, FrameReader, type CrosspointResponse, type Response } from './responses.js'
 import { errorMessage, unhandledOption } from '../util.js'
 
@@ -63,6 +70,27 @@ export interface RouterEvents {
 	status: [status: InstanceStatus, message: string | null]
 }
 
+/** One send of a message that has been merged with others, or may yet be */
+interface Sender {
+	readonly message: Buffer
+	readonly resolve: () => void
+	readonly reject: (reason: unknown) => void
+}
+
+/** A message with a {@link mergeKey}, queued once for every send merged with it */
+interface WaitingMessage {
+	readonly key: string
+	/** The queue's id for the job, to change its priority by */
+	readonly id: string
+	priority: Priority
+	/** In the order sent. The newest one's bytes are the ones that go */
+	readonly senders: Sender[]
+	/** Aborted once every sender has been, which drops the job */
+	readonly controller: AbortController
+	/** Set once the queue has started the job, after which its priority can't be changed */
+	started: boolean
+}
+
 /** Resolves true if the promise settles within the time, false if not */
 async function settlesWithin(promise: Promise<void>, ms: number): Promise<boolean> {
 	let timer: NodeJS.Timeout | undefined
@@ -85,6 +113,10 @@ export class RouterConnection extends EventEmitter<RouterEvents> {
 	readonly #timing: RouterTiming
 	readonly #queue = new PQueue({ concurrency: 1 })
 	readonly #reader = new FrameReader()
+	/** Messages not yet sent that later ones may be merged with, by {@link mergeKey} */
+	readonly #waiting = new Map<string, WaitingMessage>()
+	/** Makes each waiting message's queue id unique. The queue's own are '1', '2' and so on, so these must not be */
+	#waitingCount = 0
 	#socket: TCPHelper | undefined
 	/** Exists while a connection is open, and is aborted as it closes, which drops everything queued for it */
 	#session: AbortController | undefined
@@ -141,18 +173,26 @@ export class RouterConnection extends EventEmitter<RouterEvents> {
 	}
 
 	/**
-	 * Queues a message for the router
-	 * @param signal an action's context.signal. A message whose signal aborts before its turn is never sent
-	 * @returns once the message is written to the socket
+	 * Queues a message for the router. An INTERROGATE or CONNECT is merged with one for the same destination still
+	 * waiting, if there is one: see {@link mergeKey}
+	 * @param signal an action's context.signal. A message whose signal aborts before its turn is never sent. A merged
+	 * message goes unless every send merged into it aborts
+	 * @returns once the message is written to the socket, or the one it was merged with is
 	 * @throws if there is no connection, or it closes or the signal aborts before the message is sent
 	 */
 	async send(message: Buffer, priority: Priority = Priority.Background, signal?: AbortSignal): Promise<void> {
 		const session = this.#session
 		if (session === undefined) throw new Error('Not connected to router')
+		if (endsMerging(message)) this.#waiting.clear()
+		const key = mergeKey(message)
+		if (key !== undefined) {
+			await this.#sendMerged(key, message, priority, session, signal)
+			return
+		}
 		// p-queue listens on the combined signal from the moment the job is queued, which makes it pass an abort on
 		// eagerly. Only reading .aborted could miss one: AbortSignal.any holds its sources weakly
 		const combined = signal ? AbortSignal.any([session.signal, signal]) : session.signal
-		await this.#queue.add(async ({ signal: jobSignal }) => this.#transmit(message, jobSignal), {
+		await this.#queue.add(async ({ signal: jobSignal }) => this.#transmit(() => message, jobSignal), {
 			priority,
 			signal: combined,
 		})
@@ -189,13 +229,114 @@ export class RouterConnection extends EventEmitter<RouterEvents> {
 		})
 	}
 
-	async #transmit(message: Buffer, signal: AbortSignal | undefined): Promise<void> {
+	/**
+	 * Sends a message with a {@link mergeKey}, merged with the one waiting for the same key if there is one. That keeps
+	 * its place in the queue, and moves up to this one's priority if that is higher
+	 */
+	async #sendMerged(
+		key: string,
+		message: Buffer,
+		priority: Priority,
+		session: AbortController,
+		signal: AbortSignal | undefined,
+	): Promise<void> {
+		signal?.throwIfAborted()
+		const { promise, resolve, reject } = Promise.withResolvers<void>()
+		const sender: Sender = { message, resolve, reject }
+		let waiting = this.#waiting.get(key)
+		const merged = waiting !== undefined
+		if (waiting === undefined) {
+			waiting = {
+				key,
+				id: `${key} #${++this.#waitingCount}`,
+				priority,
+				senders: [],
+				controller: new AbortController(),
+				started: false,
+			}
+			this.#waiting.set(key, waiting)
+		} else {
+			this.#options.log('debug', `Merged ${hex(message)} with the ${key} already waiting`)
+			if (priority > waiting.priority && !waiting.started) {
+				this.#queue.setPriority(waiting.id, priority)
+				waiting.priority = priority
+			}
+		}
+		waiting.senders.push(sender)
+		if (signal) {
+			const entry = waiting
+			const onAbort = () => this.#abandon(entry, sender, signal.reason)
+			signal.addEventListener('abort', onAbort, { once: true })
+			const stopListening = () => signal.removeEventListener('abort', onAbort)
+			promise.then(stopListening, stopListening)
+		}
+		if (!merged) this.#queueWaiting(waiting, session)
+		await promise
+	}
+
+	#queueWaiting(waiting: WaitingMessage, session: AbortController): void {
+		// As in send, p-queue listens on the combined signal from the moment the job is queued
+		const signal = AbortSignal.any([session.signal, waiting.controller.signal])
+		this.#queue
+			.add(
+				async ({ signal: jobSignal }) => {
+					waiting.started = true
+					await this.#transmit(() => this.#take(waiting), jobSignal)
+				},
+				{ id: waiting.id, priority: waiting.priority, signal },
+			)
+			.then(
+				() => {
+					for (const sender of this.#finish(waiting)) sender.resolve()
+				},
+				(err: unknown) => {
+					for (const sender of this.#finish(waiting)) sender.reject(err)
+				},
+			)
+	}
+
+	/** The bytes to send for a waiting message, taken just before they go, after which nothing more is merged with it */
+	#take(waiting: WaitingMessage): Buffer {
+		this.#forget(waiting)
+		const newest = waiting.senders.at(-1)
+		// The job's signal aborts with the last sender, so this can't happen
+		if (newest === undefined) throw new Error('Every send of the message has been aborted')
+		return newest.message
+	}
+
+	/** Drops a sender whose signal has aborted. The message is still sent for any others, or dropped if there are none */
+	#abandon(waiting: WaitingMessage, sender: Sender, reason: unknown): void {
+		const index = waiting.senders.indexOf(sender)
+		if (index === -1) return
+		waiting.senders.splice(index, 1)
+		sender.reject(reason)
+		if (waiting.senders.length > 0) return
+		this.#forget(waiting)
+		waiting.controller.abort(reason)
+	}
+
+	/** Once a waiting message's job has settled: the senders still to be told how it went */
+	#finish(waiting: WaitingMessage): Sender[] {
+		this.#forget(waiting)
+		return waiting.senders.splice(0)
+	}
+
+	#forget(waiting: WaitingMessage): void {
+		if (this.#waiting.get(waiting.key) === waiting) this.#waiting.delete(waiting.key)
+	}
+
+	/**
+	 * @param take gives the bytes to send. It is called only once the line is clear, so a message that something was
+	 * merged with while it waited goes as it now stands
+	 */
+	async #transmit(take: () => Buffer, signal: AbortSignal | undefined): Promise<void> {
 		// The wait is here, at the start of a job, rather than at the end of the one before. p-queue starts the next job as
 		// soon as a running job's signal aborts, and the router must still get its gap and its chance to reply
 		await this.#lineClear
 		signal?.throwIfAborted()
 		const socket = this.#socket
 		if (!socket?.isConnected) throw new Error('Not connected to router')
+		const message = take()
 		this.#holdLine()
 		this.#options.log('debug', `Sending ${hex(message)}`)
 		try {

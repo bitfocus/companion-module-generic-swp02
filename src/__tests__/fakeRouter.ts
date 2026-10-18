@@ -124,6 +124,11 @@ export class FakeRouter {
 			.map((m) => ((m.bytes[2] >> 4) << 7) + m.bytes[3] + 1)
 	}
 
+	/** The crosspoints asked for by CONNECT, in order */
+	routed(): { destination: number; source: number }[] {
+		return this.received.filter((m) => m.command === Command.Connect).map((m) => readCrosspoint(m.bytes))
+	}
+
 	#onData(socket: Socket, connection: number, chunk: Buffer): void {
 		const buffer = this.#buffers.get(socket)
 		if (!buffer) return

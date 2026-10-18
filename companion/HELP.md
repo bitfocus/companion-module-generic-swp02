@@ -33,6 +33,10 @@ or 1 to clear. Anything else and the action is not run.
 
 A button pressed while all destinations are being interrogated is sent ahead of the remaining interrogations.
 
+Messages still waiting to be sent are merged. A destination asked for more than once is interrogated once, and several
+Connects to one destination go as a single Connect, with the last source chosen, in the place of the first. Nothing is
+merged across a Go.
+
 ## Variables
 
 - **Destination** Returns the source number connected to a destination, or `unknown` until the router reports it.

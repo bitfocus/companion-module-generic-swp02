@@ -92,6 +92,38 @@ export function routerConfigurationRequest(): Buffer {
 	return message(Command.RouterConfigurationRequest)
 }
 
+/**
+ * Messages waiting to be sent that share a key go as one, in the first one's place with the newest one's bytes. Every
+ * INTERROGATE of a destination asks the same question, and of several CONNECTs to one destination only the last would
+ * be left standing.
+ * @returns undefined for a message never merged
+ */
+export function mergeKey(message: Uint8Array): string | undefined {
+	const command = message[1]
+	if (!isCommand(command)) return undefined
+	switch (command) {
+		case Command.Interrogate:
+		case Command.Connect:
+			// The destination bytes are in the same place in both, and an interrogate's source bits are 0
+			return `${Command[command]} destination ${fromWire(message[2], message[3], 0).destination}`
+		default:
+			return undefined
+	}
+}
+
+/**
+ * True for a GO, which can make crosspoints by itself. Nothing waiting before one is merged with anything after it, as
+ * that would move the later message ahead of the GO
+ */
+export function endsMerging(message: Uint8Array): boolean {
+	const command = message[1]
+	return isCommand(command) && command === Command.Go
+}
+
+function isCommand(byte: number): byte is Command {
+	return byte in Command
+}
+
 /** Bytes as space separated hex, for logs */
 export function hex(bytes: Uint8Array | readonly number[]): string {
 	return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join(' ')
