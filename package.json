@@ -28,7 +28,7 @@
 	},
 	"dependencies": {
 		"@companion-module/base": "~2.2.1",
-		"p-queue": "^9.3.3"
+		"p-queue": "^10.0.0"
 	},
 	"devDependencies": {
 		"@companion-module/tools": "^3.2.0",
