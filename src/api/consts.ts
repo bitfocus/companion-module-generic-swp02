@@ -46,7 +46,7 @@ export enum Command {
 	Connect = 0x02,
 	/** This message returns tally information in response to an interrogating device. It also performs an effective acknowledgement to the INTERROGATE message. */
 	Tally = 0x03,
-	/** This message is issued by a device after it has made a router through a router, usually in response to a CONNECT request. It is issued on ALL ports of the interface device. */
+	/** This message is issued by a device after it has made a route through a router, usually in response to a CONNECT request. It is issued on ALL ports of the interface device. */
 	Connected = 0x04,
 	/** Used in Salvo switching situations. Routing information is held in the receiving device until activated by GO command (3.2.8). */
 	ConnectOnGo = 0x05,
