@@ -25,13 +25,17 @@ export function UpdateFeedbacks(self: SwP02Instance): void {
 				color: combineRgb(0, 0, 0),
 			},
 			options: [destinationOption(self.destinationCount), sourceOption(self.sourceCount)],
-			callback: ({ options }) => {
+			callback: ({ id, options }) => {
+				// Before the range check, so a feedback whose destination is changed to one out of range stops watching the
+				// one it had
+				self.crosspointFeedbacks.subscribe(id, options.dst)
 				if (!isInRange(options.dst, self.destinationCount)) return false
 				// API 2.x has no feedback subscribe hook. A feedback being checked is one in use, so it asks for its
 				// destination here. That happens once a connection, however often the callback runs
 				self.requestCrosspoint(options.dst)
 				return self.crosspoints.get(options.dst) === options.src
 			},
+			unsubscribe: ({ id }) => self.crosspointFeedbacks.unsubscribe(id),
 			learn: async ({ options }, context) => {
 				const src = await self.learnSource(options.dst, context.signal)
 				return src === undefined ? undefined : { src }

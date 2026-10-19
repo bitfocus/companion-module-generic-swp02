@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { FeedbackId } from '../feedbacks.js'
-import { checkFeedback, fakeInstance, feedbackDefinitions, learnFeedback } from './fixtures.js'
+import { checkFeedback, fakeInstance, feedbackDefinitions, learnFeedback, unsubscribeFeedback } from './fixtures.js'
 
 describe('Crosspoint feedback', () => {
 	it('is true only for the source on the destination', () => {
@@ -28,6 +28,33 @@ describe('Crosspoint feedback', () => {
 			expect(fake.requestCrosspoint).not.toHaveBeenCalled()
 		},
 	)
+
+	it('watches its destination, and moves to another when its destination is changed', () => {
+		const fake = fakeInstance()
+		const defs = feedbackDefinitions(fake)
+		checkFeedback(defs, FeedbackId.Crosspoint, { dst: 3, src: 1 }, 'fb-1')
+		checkFeedback(defs, FeedbackId.Crosspoint, { dst: 3, src: 2 }, 'fb-2')
+		expect(fake.self.crosspointFeedbacks.feedbacksFor(3)).toEqual(['fb-1', 'fb-2'])
+		checkFeedback(defs, FeedbackId.Crosspoint, { dst: 5, src: 1 }, 'fb-1')
+		expect(fake.self.crosspointFeedbacks.feedbacksFor(3)).toEqual(['fb-2'])
+		expect(fake.self.crosspointFeedbacks.feedbacksFor(5)).toEqual(['fb-1'])
+	})
+
+	it('stops watching its destination once changed to one out of range', () => {
+		const fake = fakeInstance()
+		const defs = feedbackDefinitions(fake)
+		checkFeedback(defs, FeedbackId.Crosspoint, { dst: 3, src: 1 }, 'fb-1')
+		checkFeedback(defs, FeedbackId.Crosspoint, { dst: 9, src: 1 }, 'fb-1')
+		expect(fake.self.crosspointFeedbacks.feedbacksFor(3)).toEqual([])
+	})
+
+	it('stops watching its destination once removed', async () => {
+		const fake = fakeInstance()
+		const defs = feedbackDefinitions(fake)
+		checkFeedback(defs, FeedbackId.Crosspoint, { dst: 3, src: 1 }, 'fb-1')
+		await unsubscribeFeedback(defs, FeedbackId.Crosspoint, { dst: 3, src: 1 }, 'fb-1')
+		expect(fake.self.crosspointFeedbacks.feedbacksFor(3)).toEqual([])
+	})
 
 	it('learns only the source', async () => {
 		const fake = fakeInstance()

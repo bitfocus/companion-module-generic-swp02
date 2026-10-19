@@ -7,6 +7,7 @@ import type {
 	CompanionActionInfo,
 	CompanionFeedbackBooleanEvent,
 	CompanionFeedbackCallbackContext,
+	CompanionFeedbackContext,
 	CompanionFeedbackDefinitions,
 	CompanionFeedbackInfo,
 	CompanionLearnCallbackContext,
@@ -15,6 +16,7 @@ import type {
 import type SwP02Instance from '../main.js'
 import { UpdateActions, type ActionId, type ActionSchema } from '../actions.js'
 import { UpdateFeedbacks, type FeedbackId, type FeedbackSchema } from '../feedbacks.js'
+import { FeedbackSubscriptions } from '../subscriptions.js'
 
 function createMocks() {
 	return {
@@ -30,8 +32,8 @@ function createMocks() {
 export type FakeInstance = { self: SwP02Instance } & ReturnType<typeof createMocks>
 
 /**
- * A plain object standing in for the instance, for the definitions to be built from. The crosspoint state is a real
- * Map; everything that would reach Companion or the router is a mock.
+ * A plain object standing in for the instance, for the definitions to be built from. The crosspoint state and the
+ * feedback subscriptions are real; everything that would reach Companion or the router is a mock.
  */
 export function fakeInstance({ sources = 16, destinations = 8 } = {}): FakeInstance {
 	const mocks = createMocks()
@@ -39,6 +41,7 @@ export function fakeInstance({ sources = 16, destinations = 8 } = {}): FakeInsta
 		sourceCount: sources,
 		destinationCount: destinations,
 		crosspoints: new Map<number, number>(),
+		crosspointFeedbacks: new FeedbackSubscriptions(),
 		...mocks,
 	} as unknown as SwP02Instance
 	return { self, ...mocks }
@@ -59,15 +62,24 @@ type AnyCallback = (event: CompanionActionEvent, context: CompanionActionCallbac
 type AnyActionHook = (info: CompanionActionInfo, context: CompanionActionContext) => Promise<void> | void
 type AnyLearn = (info: CompanionActionInfo | CompanionFeedbackInfo, context: CompanionLearnCallbackContext) => unknown
 type AnyFeedbackCallback = (event: CompanionFeedbackBooleanEvent, context: CompanionFeedbackCallbackContext) => boolean
+type AnyFeedbackHook = (info: CompanionFeedbackInfo, context: CompanionFeedbackContext) => Promise<void> | void
 
 function actionEvent(actionId: ActionId, options: CompanionOptionValues): CompanionActionEvent {
 	return { id: `action-${actionId}`, controlId: 'bank-1', actionId, surfaceId: undefined, options }
 }
 
-function feedbackEvent(feedbackId: FeedbackId, options: CompanionOptionValues): CompanionFeedbackBooleanEvent {
+/**
+ * @param id the feedback instance's id. Each feedback placed on a button has its own, which stays the same when its
+ * options are changed
+ */
+function feedbackEvent(
+	feedbackId: FeedbackId,
+	options: CompanionOptionValues,
+	id = `feedback-${feedbackId}`,
+): CompanionFeedbackBooleanEvent {
 	return {
 		type: 'boolean',
-		id: `feedback-${feedbackId}`,
+		id,
 		controlId: 'bank-1',
 		feedbackId,
 		options,
@@ -112,13 +124,26 @@ export function checkFeedback(
 	defs: CompanionFeedbackDefinitions<FeedbackSchema>,
 	feedbackId: FeedbackId,
 	options: CompanionOptionValues,
+	id?: string,
 ): boolean {
 	const def = defs[feedbackId]
 	if (!def) throw new Error(`${feedbackId} is not defined`)
-	return (def.callback as AnyFeedbackCallback)(feedbackEvent(feedbackId, options), {
+	return (def.callback as AnyFeedbackCallback)(feedbackEvent(feedbackId, options, id), {
 		type: 'feedback',
 		signal: new AbortController().signal,
 	})
+}
+
+/** As Companion does when a feedback is removed or disabled */
+export async function unsubscribeFeedback(
+	defs: CompanionFeedbackDefinitions<FeedbackSchema>,
+	feedbackId: FeedbackId,
+	options: CompanionOptionValues,
+	id?: string,
+): Promise<void> {
+	const unsubscribe = (defs[feedbackId] || undefined)?.unsubscribe as AnyFeedbackHook | undefined
+	if (!unsubscribe) throw new Error(`${feedbackId} has no unsubscribe`)
+	await unsubscribe(feedbackEvent(feedbackId, options, id), { type: 'feedback' })
 }
 
 export async function learnFeedback(

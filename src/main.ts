@@ -11,6 +11,7 @@ import {
 } from './variables.js'
 import { Command, interrogate, Priority, RouterConnection, type CrosspointResponse } from './api/index.js'
 import { isInRange } from './options.js'
+import { FeedbackSubscriptions } from './subscriptions.js'
 import { errorMessage } from './util.js'
 
 /** How long a learn waits for the router to answer an interrogate. Companion gives a learn 5 s in all */
@@ -30,6 +31,8 @@ export default class SwP02Instance extends InstanceBase<ModuleTypes> {
 	config!: ModuleConfig // Setup in init()
 	/** The source on each destination, as the router last reported it. A destination it hasn't reported is absent */
 	readonly crosspoints = new Map<number, number>()
+	/** The crosspoint feedbacks in use, by destination */
+	readonly crosspointFeedbacks = new FeedbackSubscriptions()
 	isRecordingActions = false
 	/** Destinations interrogated on the current connection, so each is asked for once however many feedbacks use it */
 	readonly #interrogated = new Set<number>()
@@ -67,6 +70,9 @@ export default class SwP02Instance extends InstanceBase<ModuleTypes> {
 		this.updateFeedbacks()
 		this.updateVariableDefinitions()
 		UpdateVariableValues(this)
+		// Reports only recheck the feedbacks on their destination, so one on a destination that is never reported again,
+		// such as one beyond a lowered count, would keep the state it had
+		this.checkFeedbacks(FeedbackId.Crosspoint)
 		this.#openRouter()
 	}
 
@@ -200,7 +206,7 @@ export default class SwP02Instance extends InstanceBase<ModuleTypes> {
 		this.crosspoints.set(destination, source)
 		if (previous !== source) {
 			this.setVariableValues({ [destinationVariableId(destination)]: source })
-			this.checkFeedbacks(FeedbackId.Crosspoint)
+			this.#checkCrosspointFeedbacks(destination)
 		}
 		if (this.isRecordingActions && isInRange(source, this.sourceCount)) {
 			this.recordAction(
@@ -208,5 +214,11 @@ export default class SwP02Instance extends InstanceBase<ModuleTypes> {
 				`connect ${destination}`,
 			)
 		}
+	}
+
+	/** Rechecks the feedbacks reading a destination, if any are */
+	#checkCrosspointFeedbacks(destination: number): void {
+		const ids = this.crosspointFeedbacks.feedbacksFor(destination)
+		if (ids.length > 0) this.checkFeedbacksById(...ids)
 	}
 }

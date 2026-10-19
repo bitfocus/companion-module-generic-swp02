@@ -1,12 +1,13 @@
 import { setTimeout as sleep } from 'node:timers/promises'
-import { InstanceStatus } from '@companion-module/base'
+import { InstanceStatus, type CompanionFeedbackDefinitions } from '@companion-module/base'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import SwP02Instance from '../main.js'
 import type { ModuleConfig } from '../config.js'
 import { Command, connect } from '../api/index.js'
-import { FeedbackId } from '../feedbacks.js'
+import { FeedbackId, type FeedbackSchema } from '../feedbacks.js'
 import { ActionId } from '../actions.js'
 import { FakeRouter, routerMessage } from './fakeRouter.js'
+import { checkFeedback } from './fixtures.js'
 
 /** What InstanceBase needs from the host, with everything it forwards to Companion mocked */
 function createContext() {
@@ -70,6 +71,10 @@ const allVariableValues = (context: ReturnType<typeof createContext>) =>
 		unknown
 	>
 
+/** The feedback definitions last given to Companion, for their callbacks to be run against the real instance */
+const definedFeedbacks = (context: ReturnType<typeof createContext>) =>
+	context.setFeedbackDefinitions.mock.calls.at(-1)?.[0] as CompanionFeedbackDefinitions<FeedbackSchema>
+
 /** Waits for the connection, and for the interrogation on connecting to finish */
 async function started(overrides: Partial<ModuleConfig> = {}) {
 	const created = createInstance()
@@ -100,13 +105,18 @@ describe('starting', () => {
 		)
 	})
 
-	it('interrogates every destination on connecting, and fills in the variables', async () => {
+	it('interrogates every destination on connecting, and fills in the variables and the feedbacks', async () => {
 		fake.crosspoints.set(3, 7)
-		const { instance, context } = await started()
+		const { instance, context } = createInstance()
+		await instance.init(config())
+		// As Companion runs the callbacks of the feedbacks on its buttons once the module has started
+		checkFeedback(definedFeedbacks(context), FeedbackId.Crosspoint, { dst: 3, src: 7 }, 'on-3')
+		await vi.waitFor(() => expect(instance.crosspoints.size).toBe(8), { timeout: 3000 })
+		await sleep(50)
 		expect(fake.interrogated()).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
 		expect(instance.crosspoints.get(3)).toBe(7)
 		expect(allVariableValues(context)).toMatchObject({ dst1: 1, dst3: 7, dst8: 1 })
-		expect(context.checkFeedbacks).toHaveBeenCalledWith([FeedbackId.Crosspoint])
+		expect(context.checkFeedbacksById).toHaveBeenCalledExactlyOnceWith(['on-3'])
 	})
 
 	it('with interrogation off, asks only for what is in use, once a connection', async () => {
@@ -168,18 +178,25 @@ describe('starting', () => {
 })
 
 describe('crosspoint changes', () => {
-	it('update the variable and feedbacks when the router reports one, and only when it changes', async () => {
+	it('update the variable, and the feedbacks on that destination, when the router reports one, and only when it changes', async () => {
 		const { instance, context } = await started()
+		const defs = definedFeedbacks(context)
+		// Both destinations were interrogated on connecting, so neither feedback asks again
+		checkFeedback(defs, FeedbackId.Crosspoint, { dst: 2, src: 5 }, 'on-2')
+		checkFeedback(defs, FeedbackId.Crosspoint, { dst: 3, src: 5 }, 'on-3')
 		context.setVariableValues.mockClear()
 		context.checkFeedbacks.mockClear()
+		context.checkFeedbacksById.mockClear()
 		fake.broadcast(routerMessage(Command.Connected, 0x00, 1, 4)) // destination 2, source 5
-		await vi.waitFor(() => expect(instance.crosspoints.get(2)).toBe(5))
-		expect(context.setVariableValues).toHaveBeenCalledExactlyOnceWith({ dst2: 5 })
-		expect(context.checkFeedbacks).toHaveBeenCalledExactlyOnceWith([FeedbackId.Crosspoint])
+		fake.broadcast(routerMessage(Command.Connected, 0x00, 3, 5)) // destination 4, source 6, which no feedback is on
+		await vi.waitFor(() => expect(instance.crosspoints.get(4)).toBe(6))
+		expect(context.setVariableValues.mock.calls).toEqual([[{ dst2: 5 }], [{ dst4: 6 }]])
+		expect(context.checkFeedbacksById).toHaveBeenCalledExactlyOnceWith(['on-2'])
 		fake.broadcast(routerMessage(Command.Tally, 0x00, 1, 4))
 		await sleep(50)
-		expect(context.setVariableValues).toHaveBeenCalledTimes(1)
-		expect(context.checkFeedbacks).toHaveBeenCalledTimes(1)
+		expect(context.setVariableValues).toHaveBeenCalledTimes(2)
+		expect(context.checkFeedbacksById).toHaveBeenCalledTimes(1)
+		expect(context.checkFeedbacks).not.toHaveBeenCalled()
 	})
 
 	it('ignore a destination beyond the configured count', async () => {
@@ -285,6 +302,21 @@ describe('config changes and teardown', () => {
 			'dst3',
 			'dst4',
 		])
+	})
+
+	// Reports recheck only the feedbacks on their own destination, and one beyond a lowered count is never reported again
+	it('recheck every crosspoint feedback, so none keeps the state it had', async () => {
+		const { instance, context } = await started()
+		expect(checkFeedback(definedFeedbacks(context), FeedbackId.Crosspoint, { dst: 6, src: 1 }, 'on-6')).toBe(true)
+		const rechecked: boolean[] = []
+		// As Companion would, running the callback of every crosspoint feedback
+		context.checkFeedbacks.mockImplementation(() => {
+			rechecked.push(checkFeedback(definedFeedbacks(context), FeedbackId.Crosspoint, { dst: 6, src: 1 }, 'on-6'))
+		})
+		await instance.configUpdated(config({ dst: 4 }))
+		await vi.waitFor(() => expect(fake.interrogated()).toHaveLength(8 + 4), { timeout: 3000 })
+		await sleep(50)
+		expect(rechecked).toEqual([false])
 	})
 
 	it('destroy closes the connection for good', async () => {
