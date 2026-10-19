@@ -33,7 +33,7 @@
 	"devDependencies": {
 		"@companion-module/tools": "^3.2.0",
 		"@types/node": "^26.6.5",
-		"@vitest/coverage-v8": "5.0.4",
+		"@vitest/coverage-v8": "5.0.5",
 		"eslint": "^10.12.0",
 		"husky": "^9.1.7",
 		"lint-staged": "^17.6.0",
@@ -42,7 +42,7 @@
 		"typescript": "~6.0.3",
 		"typescript-eslint": "^8.71.2",
 		"vite": "^8.3.4",
-		"vitest": "5.0.4"
+		"vitest": "5.0.5"
 	},
 	"prettier": "@companion-module/tools/.prettierrc.json",
 	"lint-staged": {
