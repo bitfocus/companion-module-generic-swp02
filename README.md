@@ -18,6 +18,7 @@ See [HELP.md](./companion/HELP.md) and [LICENSE](./LICENSE)
 - Fix destinations read from a tally whose multiplier byte had bit 3 set
 - Fix connect on go acknowledgements being rejected as the wrong length
 - Learn asks the router for a crosspoint it has not reported yet
+- Check feedbacks by id
 
 ### Version 1.2.4
 
